@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# Jupyter / system files
+.ipynb_checkpoints/
+.DS_Store
+
+# Dataset
+data/
+
+# Outputs and checkpoints
+outputs/
+.matplotlib-cache/
+outputs/checkpoints/
+outputs/reconstructions/
+outputs/results/*.npy
+outputs/results/*.pkl
+*.pkl
+
+# Optional: keep figures if you want to show results
+# outputs/figures/
