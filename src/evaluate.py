@@ -20,6 +20,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+try:
+    from scipy import ndimage
+except ImportError:
+    ndimage = None
+
 
 def load_model(model, path):
     with open(path, "rb") as f:
@@ -100,6 +105,15 @@ def smooth_error_map(error_map, kernel_size=1):
 
 def connected_components(binary_mask):
     binary_mask = np.asarray(binary_mask, dtype=bool)
+
+    if ndimage is not None:
+        structure = np.ones((3, 3), dtype=int)
+        labels, num_labels = ndimage.label(binary_mask, structure=structure)
+        return [
+            list(zip(*np.where(labels == label_id)))
+            for label_id in range(1, num_labels + 1)
+        ]
+
     h, w = binary_mask.shape
     visited = np.zeros_like(binary_mask, dtype=bool)
     components = []
@@ -117,15 +131,18 @@ def connected_components(binary_mask):
                 y, x = stack.pop()
                 coords.append((y, x))
 
-                for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
-                    if (
-                        0 <= ny < h
-                        and 0 <= nx < w
-                        and binary_mask[ny, nx]
-                        and not visited[ny, nx]
-                    ):
-                        visited[ny, nx] = True
-                        stack.append((ny, nx))
+                for ny in range(y - 1, y + 2):
+                    for nx in range(x - 1, x + 2):
+                        if ny == y and nx == x:
+                            continue
+                        if (
+                            0 <= ny < h
+                            and 0 <= nx < w
+                            and binary_mask[ny, nx]
+                            and not visited[ny, nx]
+                        ):
+                            visited[ny, nx] = True
+                            stack.append((ny, nx))
 
             components.append(coords)
 
