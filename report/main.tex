@@ -1,0 +1,221 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+
+\begin{document}
+
+\title{Convolutional Autoencoder for Unsupervised Surface Defect Detection}
+
+\author{
+\IEEEauthorblockN{Fuat Isiklan}
+\IEEEauthorblockA{
+Department of Computer Engineering\\
+KOM6110 Machine Learning and Artificial Neural Networks\\
+Istanbul, Turkey\\
+Email: your.email@example.com
+}
+}
+
+\maketitle
+
+\begin{abstract}
+This paper presents an unsupervised surface defect detection system based on a convolutional autoencoder. The model is trained only with non-defective carpet images and detects abnormal samples using reconstruction-based anomaly scores. A vanilla convolutional autoencoder is used as the baseline, and a denoising autoencoder variant is prepared for comparison. In addition to global reconstruction error, local patch-based and connected-component blob-based anomaly scores are considered to better capture small surface defects. The system is evaluated at image level using accuracy, precision, recall, F1-score, and ROC-AUC, and at pixel level using precision, recall, F1-score, and intersection-over-union.
+\end{abstract}
+
+\begin{IEEEkeywords}
+autoencoder, convolutional autoencoder, denoising autoencoder, anomaly detection, surface defect detection, reconstruction error
+\end{IEEEkeywords}
+
+\section{Introduction}
+Automatic surface defect detection is an important task in industrial visual inspection. Manual inspection can be slow, inconsistent, and difficult to scale, especially for textured materials such as carpet or fabric. In many real production settings, defective samples are also limited or imbalanced, while normal samples are easier to collect. This makes unsupervised anomaly detection a suitable approach.
+
+Autoencoders are neural networks trained to reconstruct their inputs through a compressed latent representation. When trained only on normal samples, an autoencoder is expected to reconstruct normal patterns well while producing larger reconstruction errors for abnormal regions. This property can be used for defect detection without requiring defective images during training.
+
+In this project, a convolutional autoencoder is implemented from scratch using NumPy. The model is trained on normal carpet images from the MVTec AD dataset and tested on both normal and defective samples. The main objective is binary anomaly detection: deciding whether an image is normal or defective. Pixel-level localization is also investigated by thresholding reconstruction error maps and comparing the predicted defect regions with ground-truth masks.
+
+The contributions of this work are as follows:
+\begin{itemize}
+    \item A from-scratch NumPy implementation of a convolutional autoencoder for unsupervised surface defect detection.
+    \item A comparison-ready training setup for vanilla and denoising convolutional autoencoders.
+    \item Several reconstruction-based anomaly scores, including global mean squared error, local patch score, and connected-component blob score.
+    \item Image-level and pixel-level evaluation outputs suitable for final project analysis.
+\end{itemize}
+
+\section{Methods}
+\subsection{Dataset and Preprocessing}
+The experiments use the carpet category of the MVTec Anomaly Detection dataset. The training set contains only non-defective carpet images, while the test set contains both normal and defective images. The defect categories include color defects, cuts, holes, metal contamination, and thread defects.
+
+Each image is converted to grayscale, resized to a fixed spatial resolution, and normalized to the range $[0,1]$. In the current implementation, experiments can be performed at either $64 \times 64$ or $128 \times 128$ resolution. The same image size must be used for both training and evaluation of a checkpoint.
+
+\subsection{Convolutional Autoencoder Architecture}
+The model follows an encoder--decoder structure. The encoder maps the input image $X$ to a compressed latent representation $F$, and the decoder reconstructs an output image $X'$:
+\begin{equation}
+    \phi: X \rightarrow F,
+\end{equation}
+\begin{equation}
+    \gamma: F \rightarrow X'.
+\end{equation}
+
+The model is trained to minimize reconstruction error:
+\begin{equation}
+    \min_{\phi,\gamma} M(X - X'),
+\end{equation}
+where $M$ is the mean squared error loss.
+
+The encoder consists of two convolutional blocks:
+\begin{itemize}
+    \item Convolution $1 \rightarrow 8$, ReLU, average pooling.
+    \item Convolution $8 \rightarrow 16$, ReLU, average pooling.
+\end{itemize}
+
+The decoder mirrors this structure using upsampling and convolution:
+\begin{itemize}
+    \item Upsampling, convolution $16 \rightarrow 8$, ReLU.
+    \item Upsampling, convolution $8 \rightarrow 1$, sigmoid.
+\end{itemize}
+
+For an input image of size $1 \times 64 \times 64$, the latent representation has size $16 \times 16 \times 16$. All neural network layers, backpropagation, mean squared error loss, and Adam optimization are implemented with NumPy.
+
+\subsection{Vanilla Autoencoder Training}
+In the vanilla setting, the model receives a normal image as input and is trained to reconstruct the same image:
+\begin{equation}
+    \hat{X} = AE(X),
+\end{equation}
+\begin{equation}
+    \mathcal{L}_{vanilla} = \frac{1}{N}\sum (X - \hat{X})^2.
+\end{equation}
+
+Only normal carpet images are used during training. Defective samples are not used to optimize the model.
+
+\subsection{Denoising Autoencoder Training}
+The denoising variant uses the same architecture, but the input image is corrupted with Gaussian noise while the reconstruction target remains the clean image:
+\begin{equation}
+    \tilde{X} = X + \epsilon,\quad \epsilon \sim \mathcal{N}(0,\sigma^2),
+\end{equation}
+\begin{equation}
+    \hat{X} = AE(\tilde{X}),
+\end{equation}
+\begin{equation}
+    \mathcal{L}_{denoise} = \frac{1}{N}\sum (X - \hat{X})^2.
+\end{equation}
+
+This encourages the autoencoder to learn robust normal texture reconstruction instead of simply copying pixel noise.
+
+\subsection{Anomaly Scoring}
+After reconstruction, a pixel-wise squared error map is computed:
+\begin{equation}
+    E = (X - X')^2.
+\end{equation}
+
+Several anomaly scores are supported.
+
+\subsubsection{Global MSE Score}
+The global score averages the reconstruction error over the whole image:
+\begin{equation}
+    s_{global} = \frac{1}{HW}\sum_{i,j} E_{i,j}.
+\end{equation}
+
+\subsubsection{Patch Score}
+Because defects may occupy only a small region, global averaging can dilute the anomaly signal. The local patch score divides the error map into patches and uses the maximum patch mean:
+\begin{equation}
+    s_{patch} = \max_{p \in P} \frac{1}{|p|}\sum_{(i,j)\in p} E_{i,j}.
+\end{equation}
+
+\subsubsection{Blob Score}
+The blob score applies a smoothing filter to the error map, thresholds high-error pixels, removes connected components smaller than a selected size, and scores the strongest remaining high-error component. This method is intended to reduce isolated noisy pixels and focus on coherent defect regions.
+
+\subsection{Thresholding}
+The anomaly threshold is estimated from normal training images. Given training anomaly scores, the image-level threshold is selected as a percentile of the normal score distribution:
+\begin{equation}
+    T = percentile(S_{train}, q).
+\end{equation}
+
+An image is predicted as defective if:
+\begin{equation}
+    s(X) > T.
+\end{equation}
+
+Pixel-level masks are generated by thresholding the reconstruction error map using a percentile of normal training pixel errors. Additional smoothing and connected-component filtering can be applied for blob-based localization.
+
+\subsection{Evaluation Metrics}
+Image-level detection is evaluated using accuracy, precision, recall, F1-score, and ROC-AUC. Pixel-level localization is evaluated using pixel precision, pixel recall, pixel F1-score, and intersection-over-union:
+\begin{equation}
+    IoU = \frac{TP}{TP + FP + FN}.
+\end{equation}
+
+\section{Results}
+This section will be completed after the final experiments.
+
+\subsection{Experimental Setup}
+The final report should include:
+\begin{itemize}
+    \item Image size used for training and evaluation.
+    \item Number of epochs.
+    \item Batch size.
+    \item Learning rate.
+    \item Autoencoder type: vanilla or denoising.
+    \item Anomaly score: global MSE, patch score, or blob score.
+    \item Threshold percentile values.
+\end{itemize}
+
+\subsection{Quantitative Results}
+Table~\ref{tab:image-results} can be filled after running the final experiments.
+
+\begin{table}[htbp]
+\caption{Image-Level Defect Detection Results}
+\label{tab:image-results}
+\centering
+\begin{tabular}{lccccc}
+\toprule
+Model & Acc. & Prec. & Rec. & F1 & AUC \\
+\midrule
+Vanilla CAE & -- & -- & -- & -- & -- \\
+Denoising CAE & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\caption{Pixel-Level Localization Results}
+\label{tab:pixel-results}
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Model & Prec. & Rec. & F1 & IoU \\
+\midrule
+Vanilla CAE & -- & -- & -- & -- \\
+Denoising CAE & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Qualitative Results}
+Representative reconstruction examples and localization masks should be inserted here. Suggested figures include the original image, reconstruction, reconstruction error map, predicted mask, and ground-truth mask.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/06_reconstruction_examples.png}
+\caption{Example input images, reconstructions, and reconstruction error maps. Replace this path after uploading figures to Overleaf.}
+\label{fig:reconstruction}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/08_pixel_localization.png}
+\caption{Example pixel-level localization results. Replace this path after uploading figures to Overleaf.}
+\label{fig:localization}
+\end{figure}
+
+\section{Conclusion}
+This project investigated unsupervised carpet defect detection using a from-scratch convolutional autoencoder. The model learns normal surface reconstruction from non-defective training samples and detects anomalies using reconstruction-based scores. Local patch and blob-based scores are introduced to better capture small defects that may be hidden by global reconstruction error.
+
+The final results will compare vanilla and denoising convolutional autoencoders under the same evaluation pipeline. The expected analysis will discuss the tradeoff between recall and precision, the effect of threshold selection, and the quality of pixel-level localization. Future improvements may include higher-resolution training, stronger architectures, validation-based threshold selection, and using encoder features for defect-type classification.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

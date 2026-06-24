@@ -79,12 +79,103 @@ def patch_means(error_map, patch_size=8, stride=4):
     return np.array(values)
 
 
+def smooth_error_map(error_map, kernel_size=1):
+    error_map = np.asarray(error_map)
+    kernel_size = int(kernel_size)
+    if kernel_size <= 1:
+        return error_map
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+
+    pad = kernel_size // 2
+    padded = np.pad(error_map, ((pad, pad), (pad, pad)), mode="edge")
+    smoothed = np.zeros_like(error_map, dtype=np.float64)
+
+    for y in range(kernel_size):
+        for x in range(kernel_size):
+            smoothed += padded[y:y + error_map.shape[0], x:x + error_map.shape[1]]
+
+    return smoothed / (kernel_size * kernel_size)
+
+
+def connected_components(binary_mask):
+    binary_mask = np.asarray(binary_mask, dtype=bool)
+    h, w = binary_mask.shape
+    visited = np.zeros_like(binary_mask, dtype=bool)
+    components = []
+
+    for y0 in range(h):
+        for x0 in range(w):
+            if not binary_mask[y0, x0] or visited[y0, x0]:
+                continue
+
+            stack = [(y0, x0)]
+            visited[y0, x0] = True
+            coords = []
+
+            while stack:
+                y, x = stack.pop()
+                coords.append((y, x))
+
+                for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                    if (
+                        0 <= ny < h
+                        and 0 <= nx < w
+                        and binary_mask[ny, nx]
+                        and not visited[ny, nx]
+                    ):
+                        visited[ny, nx] = True
+                        stack.append((ny, nx))
+
+            components.append(coords)
+
+    return components
+
+
+def filter_small_components(binary_mask, min_component_size=1):
+    min_component_size = max(1, int(min_component_size))
+    if min_component_size <= 1:
+        return np.asarray(binary_mask, dtype=bool)
+
+    filtered = np.zeros_like(binary_mask, dtype=bool)
+    for component in connected_components(binary_mask):
+        if len(component) >= min_component_size:
+            ys, xs = zip(*component)
+            filtered[np.array(ys), np.array(xs)] = True
+    return filtered
+
+
+def blob_score(
+    error_map,
+    pixel_threshold,
+    smooth_kernel=1,
+    min_component_size=1,
+):
+    if pixel_threshold is None:
+        raise ValueError("blob_score requires a pixel_threshold")
+
+    processed = smooth_error_map(error_map, smooth_kernel)
+    blob_mask = filter_small_components(processed > pixel_threshold, min_component_size)
+    best_score = 0.0
+
+    for component in connected_components(blob_mask):
+        ys, xs = zip(*component)
+        values = processed[np.array(ys), np.array(xs)]
+        excess = np.maximum(values - pixel_threshold, 0.0)
+        best_score = max(best_score, float(np.sum(excess)))
+
+    return best_score
+
+
 def anomaly_score_from_map(
     error_map,
     score_type="global_mse",
     patch_size=8,
     patch_stride=4,
     topk_percent=5.0,
+    pixel_threshold=None,
+    smooth_kernel=1,
+    min_component_size=1,
 ):
     if score_type == "global_mse":
         return float(np.mean(error_map))
@@ -97,6 +188,13 @@ def anomaly_score_from_map(
     if score_type == "topk_patches":
         patches = patch_means(error_map, patch_size, patch_stride)
         return topk_mean(patches, topk_percent)
+    if score_type == "blob_score":
+        return blob_score(
+            error_map,
+            pixel_threshold=pixel_threshold,
+            smooth_kernel=smooth_kernel,
+            min_component_size=min_component_size,
+        )
     raise ValueError(f"Unknown score type: {score_type}")
 
 
@@ -231,24 +329,38 @@ def collect_train_scores(
     patch_size,
     patch_stride,
     topk_percent,
+    pixel_threshold_percentile,
+    smooth_kernel,
+    min_component_size,
 ):
-    scores = []
-    pixel_errors = []
+    error_maps = []
+    processed_pixel_errors = []
     for x, _ in batch_loader(train_dataset, batch_size, shuffle=False):
         x_hat = model.forward(x)
         for i in range(x.shape[0]):
             error_map = per_pixel_error(x[i], x_hat[i])
-            scores.append(
-                anomaly_score_from_map(
-                    error_map,
-                    score_type=score_type,
-                    patch_size=patch_size,
-                    patch_stride=patch_stride,
-                    topk_percent=topk_percent,
-                )
-            )
-            pixel_errors.extend(error_map.reshape(-1))
-    return np.array(scores), np.array(pixel_errors)
+            processed_error_map = smooth_error_map(error_map, smooth_kernel)
+            error_maps.append(error_map)
+            processed_pixel_errors.extend(processed_error_map.reshape(-1))
+
+    processed_pixel_errors = np.array(processed_pixel_errors)
+    pixel_threshold = float(
+        np.percentile(processed_pixel_errors, pixel_threshold_percentile)
+    )
+    scores = [
+        anomaly_score_from_map(
+            error_map,
+            score_type=score_type,
+            patch_size=patch_size,
+            patch_stride=patch_stride,
+            topk_percent=topk_percent,
+            pixel_threshold=pixel_threshold,
+            smooth_kernel=smooth_kernel,
+            min_component_size=min_component_size,
+        )
+        for error_map in error_maps
+    ]
+    return np.array(scores), processed_pixel_errors, pixel_threshold
 
 
 def run_evaluation(
@@ -263,11 +375,13 @@ def run_evaluation(
     patch_stride,
     topk_percent,
     pixel_threshold_percentile,
+    smooth_kernel,
+    min_component_size,
     data_root,
     category,
     img_size,
 ):
-    train_raw_scores, train_pixel_errors = collect_train_scores(
+    train_raw_scores, train_pixel_errors, pixel_threshold = collect_train_scores(
         model,
         train_dataset,
         batch_size,
@@ -275,8 +389,10 @@ def run_evaluation(
         patch_size,
         patch_stride,
         topk_percent,
+        pixel_threshold_percentile,
+        smooth_kernel,
+        min_component_size,
     )
-    pixel_threshold = float(np.percentile(train_pixel_errors, pixel_threshold_percentile))
 
     records = []
     for i in range(len(test_dataset)):
@@ -291,9 +407,16 @@ def run_evaluation(
             patch_size=patch_size,
             patch_stride=patch_stride,
             topk_percent=topk_percent,
+            pixel_threshold=pixel_threshold,
+            smooth_kernel=smooth_kernel,
+            min_component_size=min_component_size,
         )
         mask = load_mask(path, data_root, category, img_size)
-        pred_mask = error_map > pixel_threshold
+        processed_error_map = smooth_error_map(error_map, smooth_kernel)
+        pred_mask = filter_small_components(
+            processed_error_map > pixel_threshold,
+            min_component_size,
+        )
         pixel_tp = int(np.sum(pred_mask & mask))
         pixel_fp = int(np.sum(pred_mask & ~mask))
         pixel_fn = int(np.sum(~pred_mask & mask))
@@ -314,6 +437,7 @@ def run_evaluation(
                 "x": x,
                 "x_hat": x_hat[0],
                 "error_map": error_map,
+                "processed_error_map": processed_error_map,
                 "mask": mask,
                 "pred_mask": pred_mask,
                 "pixel_tp": pixel_tp,
@@ -360,6 +484,8 @@ def run_evaluation(
         "patch_size": patch_size,
         "patch_stride": patch_stride,
         "topk_percent": topk_percent,
+        "smooth_kernel": smooth_kernel,
+        "min_component_size": min_component_size,
         "pixel_threshold": pixel_threshold,
         "pixel_threshold_percentile": pixel_threshold_percentile,
         "accuracy": image_metrics["accuracy"],
@@ -387,6 +513,8 @@ def print_metrics(metrics):
     print(f"Threshold percentile: {metrics['threshold_percentile']}")
     print(f"Score type:           {metrics['score_type']}")
     print(f"Score mode:           {metrics['score_mode']}")
+    print(f"Smooth kernel:        {metrics['smooth_kernel']}")
+    print(f"Min component size:   {metrics['min_component_size']}")
     print(f"Threshold:            {metrics['threshold']:.8f}")
     print(f"Accuracy:             {metrics['accuracy']:.4f}")
     print(f"Precision:            {metrics['precision']:.4f}")
@@ -453,7 +581,7 @@ def plot_score_distributions(train_scores, records, threshold, out_path, score_l
     )
     ax.set_xlabel(score_label)
     ax.set_ylabel("Density")
-    ax.set_title("Reconstruction error: train normal vs test good vs test defect")
+    ax.set_title("Anomaly score: train normal vs test good vs test defect")
     ax.legend(loc="upper right", fontsize=9)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -699,8 +827,8 @@ def plot_localization_grid(records, pixel_threshold, out_path, max_images=6):
         axes[row, 2].set_title(f"Pred mask\nIoU={rec['pixel_iou']:.3f}", fontsize=8)
         axes[row, 2].axis("off")
 
-        im = axes[row, 3].imshow(rec["error_map"], cmap="hot")
-        axes[row, 3].set_title("Error map", fontsize=8)
+        im = axes[row, 3].imshow(rec["processed_error_map"], cmap="hot")
+        axes[row, 3].set_title("Processed error map", fontsize=8)
         axes[row, 3].axis("off")
         fig.colorbar(im, ax=axes[row, 3], fraction=0.046)
 
@@ -728,7 +856,13 @@ def build_threshold_sweep(train_scores, records, percentiles):
     return rows
 
 
-def build_pixel_threshold_sweep(train_pixel_errors, records, percentiles):
+def build_pixel_threshold_sweep(
+    train_pixel_errors,
+    records,
+    percentiles,
+    smooth_kernel,
+    min_component_size,
+):
     rows = []
 
     for percentile in percentiles:
@@ -736,7 +870,10 @@ def build_pixel_threshold_sweep(train_pixel_errors, records, percentiles):
         tp = fp = fn = tn = 0
 
         for rec in records:
-            pred_mask = rec["error_map"] > threshold
+            pred_mask = filter_small_components(
+                rec["processed_error_map"] > threshold,
+                min_component_size,
+            )
             mask = rec["mask"]
             tp += int(np.sum(pred_mask & mask))
             fp += int(np.sum(pred_mask & ~mask))
@@ -961,6 +1098,8 @@ def evaluate(args):
         args.patch_stride,
         args.topk_percent,
         args.pixel_threshold_percentile,
+        args.smooth_error_kernel,
+        args.min_component_size,
         args.data_root,
         args.category,
         args.img_size,
@@ -974,6 +1113,8 @@ def evaluate(args):
         train_pixel_errors,
         records,
         parse_percentiles(args.pixel_threshold_sweep_percentiles),
+        args.smooth_error_kernel,
+        args.min_component_size,
     )
 
     print_metrics(metrics)
@@ -1030,6 +1171,7 @@ if __name__ == "__main__":
             "topk_pixels",
             "max_patch",
             "topk_patches",
+            "blob_score",
         ],
         default="max_patch",
         help="Image-level anomaly score computed from the reconstruction error map",
@@ -1051,6 +1193,18 @@ if __name__ == "__main__":
         type=float,
         default=5.0,
         help="Percent of largest pixels/patches averaged by top-k scores",
+    )
+    parser.add_argument(
+        "--smooth_error_kernel",
+        type=int,
+        default=1,
+        help="Odd average-filter size for error-map smoothing before blob/mask scoring",
+    )
+    parser.add_argument(
+        "--min_component_size",
+        type=int,
+        default=1,
+        help="Remove predicted connected components smaller than this many pixels",
     )
     parser.add_argument(
         "--pixel_threshold_percentile",

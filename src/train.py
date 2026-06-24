@@ -51,6 +51,19 @@ def plot_training_history(history, out_path):
     plt.close(fig)
 
 
+def add_gaussian_noise(x, std):
+    if std <= 0:
+        return x
+    noisy = x + np.random.normal(loc=0.0, scale=std, size=x.shape)
+    return np.clip(noisy, 0.0, 1.0)
+
+
+def checkpoint_filename(category, training_mode):
+    if training_mode == "vanilla":
+        return f"{category}_scratch_cae.pkl"
+    return f"{category}_{training_mode}_scratch_cae.pkl"
+
+
 def train(args):
     np.random.seed(args.seed)
 
@@ -85,7 +98,12 @@ def train(args):
         )
 
         for x, target in pbar:
-            pred = model.forward(x)
+            if args.training_mode == "denoising":
+                model_input = add_gaussian_noise(x, args.noise_std)
+            else:
+                model_input = x
+
+            pred = model.forward(model_input)
             loss = loss_fn.forward(pred, target)
 
             grad = loss_fn.backward()
@@ -105,7 +123,7 @@ def train(args):
 
         if epoch_loss < best_loss:
             best_loss = epoch_loss
-            save_path = output_dir / f"{args.category}_scratch_cae.pkl"
+            save_path = output_dir / checkpoint_filename(args.category, args.training_mode)
             save_model(model, save_path)
             print(f"Saved model to {save_path}")
 
@@ -125,6 +143,8 @@ def train(args):
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
                 "learning_rate": args.lr,
+                "training_mode": args.training_mode,
+                "noise_std": args.noise_std,
                 "seed": args.seed,
                 "best_loss": float(best_loss),
                 "history": history,
@@ -165,6 +185,18 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--training_mode",
+        choices=["vanilla", "denoising"],
+        default="vanilla",
+        help="vanilla reconstructs clean input; denoising reconstructs clean target from noisy input",
+    )
+    parser.add_argument(
+        "--noise_std",
+        type=float,
+        default=0.10,
+        help="Gaussian noise standard deviation for denoising training",
+    )
     parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
