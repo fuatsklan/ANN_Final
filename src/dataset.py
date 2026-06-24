@@ -5,7 +5,7 @@ from PIL import Image
 
 IMAGE_RESAMPLE = Image.Resampling.BILINEAR
 
-
+# Load one image 
 def load_image(path, img_size=64):
     img = Image.open(path).convert("L")
     img = img.resize((img_size, img_size), resample=IMAGE_RESAMPLE)
@@ -13,8 +13,9 @@ def load_image(path, img_size=64):
     arr = arr[None, :, :]
     return arr
 
-
+# Training split for one MVtex cat
 class MVTecTrainDataset:
+
     def __init__(self, root_dir, category="carpet", img_size=64):
         self.image_dir = Path(root_dir) / category / "train" / "good"
         self.paths = sorted(self.image_dir.glob("*.png"))
@@ -30,8 +31,9 @@ class MVTecTrainDataset:
         x = load_image(self.paths[idx], self.img_size)
         return x, x
 
-
+# Test split 
 class MVTecTestDataset:
+
     def __init__(self, root_dir, category="carpet", img_size=64):
         self.test_dir = Path(root_dir) / category / "test"
         self.img_size = img_size
@@ -57,7 +59,7 @@ class MVTecTestDataset:
         x = load_image(path, self.img_size)
         return x, label, defect_type, str(path)
 
-
+# Yield small numpy batches
 def batch_loader(dataset, batch_size=4, shuffle=True):
     indices = np.arange(len(dataset))
 

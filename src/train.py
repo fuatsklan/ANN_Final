@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 
 
 def save_model(model, path):
+    """Save only parameter arrays, not the whole Python object."""
     params = [p.copy() for p, g in model.params()]
 
     with open(path, "wb") as f:
@@ -29,6 +30,7 @@ def save_model(model, path):
 
 
 def load_model(model, path):
+    """Load saved parameter arrays into an existing model."""
     with open(path, "rb") as f:
         saved_params = pickle.load(f)
 
@@ -37,6 +39,7 @@ def load_model(model, path):
 
 
 def plot_training_history(history, out_path):
+    """Plot the epoch-level reconstruction loss."""
     epochs = [row["epoch"] for row in history]
     losses = [row["train_loss"] for row in history]
 
@@ -52,6 +55,7 @@ def plot_training_history(history, out_path):
 
 
 def add_gaussian_noise(x, std):
+    """Corrupt inputs for denoising training."""
     if std <= 0:
         return x
     noisy = x + np.random.normal(loc=0.0, scale=std, size=x.shape)
@@ -59,12 +63,14 @@ def add_gaussian_noise(x, std):
 
 
 def checkpoint_filename(category, training_mode):
+    """Keep vanilla checkpoint names simple for backward compatibility."""
     if training_mode == "vanilla":
         return f"{category}_scratch_cae.pkl"
     return f"{category}_{training_mode}_scratch_cae.pkl"
 
 
 def train(args):
+    """Train the autoencoder and save the best checkpoint."""
     np.random.seed(args.seed)
 
     dataset = MVTecTrainDataset(
@@ -98,6 +104,7 @@ def train(args):
         )
 
         for x, target in pbar:
+            # Denoising changes only the input; the target stays clean.
             if args.training_mode == "denoising":
                 model_input = add_gaussian_noise(x, args.noise_std)
             else:

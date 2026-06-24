@@ -16,15 +16,12 @@ venv/
 
 # Dataset
 data/
+tools/
 
-# Outputs and checkpoints
+# Private report (keep local only)
+report/
+
+# Generated outputs (figures, metrics, checkpoints, experiments)
 outputs/
 .matplotlib-cache/
-outputs/checkpoints/
-outputs/reconstructions/
-outputs/results/*.npy
-outputs/results/*.pkl
 *.pkl
-
-# Optional: keep figures if you want to show results
-# outputs/figures/

@@ -2,6 +2,8 @@ import numpy as np
 
 
 class Conv2D:
+    """Naive 2D convolution layer with manual gradients."""
+
     def __init__(self, in_ch, out_ch, k=3, padding=1):
         self.in_ch = in_ch
         self.out_ch = out_ch
@@ -69,6 +71,8 @@ class Conv2D:
 
 
 class ReLU:
+    """ReLU activation."""
+
     def forward(self, x):
         self.mask = x > 0
         return x * self.mask
@@ -81,6 +85,8 @@ class ReLU:
 
 
 class Sigmoid:
+    """Sigmoid activation used to keep reconstructed pixels in [0, 1]."""
+
     def forward(self, x):
         self.out = 1 / (1 + np.exp(-np.clip(x, -30, 30)))
         return self.out
@@ -93,6 +99,8 @@ class Sigmoid:
 
 
 class AvgPool2D:
+    """Average pooling for spatial downsampling."""
+
     def __init__(self, k=2):
         self.k = k
 
@@ -128,6 +136,8 @@ class AvgPool2D:
 
 
 class Upsample2D:
+    """Nearest-neighbor upsampling for the decoder."""
+
     def __init__(self, scale=2):
         self.scale = scale
 
@@ -154,6 +164,8 @@ class Upsample2D:
 
 
 class Sequential:
+    """Tiny sequential container for scratch layers."""
+
     def __init__(self, layers):
         self.layers = layers
 
@@ -175,6 +187,8 @@ class Sequential:
 
 
 class MSELoss:
+    """Mean squared reconstruction loss."""
+
     def forward(self, pred, target):
         self.pred = pred
         self.target = target
@@ -185,6 +199,8 @@ class MSELoss:
 
 
 class Adam:
+    """Adam optimizer over (parameter, gradient) pairs."""
+
     def __init__(self, params, lr=1e-3, beta1=0.9, beta2=0.999, eps=1e-8):
         self.params = params
         self.lr = lr
